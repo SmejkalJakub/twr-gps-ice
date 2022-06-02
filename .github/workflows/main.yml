@@ -14,8 +14,8 @@ jobs:
     steps:
       - uses: actions/checkout@v2
 
-      - name: arm-none-eabi-gcc
-        uses: fiam/arm-none-eabi-gcc@v1
+      - name: arm-none-eabi-gcc GNU Arm Embedded Toolchain
+        uses: carlosperate/arm-none-eabi-gcc-action@v1.4.0
 
       - name: Install bcf
         run: pip install bcf
