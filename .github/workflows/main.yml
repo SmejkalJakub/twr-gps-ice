@@ -13,23 +13,18 @@ jobs:
 
     steps:
       - uses: actions/checkout@v2
-      - name: Install Python dependencies
-        uses: py-actions/py-dependency-install@v2
-        with:
-          path: "requirements.txt"
-          update-pip: "true"
-          update-setuptools: "false"
-          update-wheel: "false"
+      - name: Install bcf
+        run: pip install bcf
 
       - name: Compile
-        run: pio run -e release
+        run: make -j release
 
       - name: Set env
         if: ${{ github.event_name == 'release' }}
         run: |
           echo "GITHUB_TAG=${GITHUB_REF#refs/*/}" >> $GITHUB_ENV
           echo "REPOSITORY_NAME=${GITHUB_REPOSITORY##*/}" >> $GITHUB_ENV
-          mv .pio/build/release/firmware.bin ${GITHUB_REPOSITORY##*/}-${GITHUB_REF#refs/*/}.bin
+          mv out/release/firmware.bin ${GITHUB_REPOSITORY##*/}-${GITHUB_REF#refs/*/}.bin
 
       - name: Release
         if: ${{ github.event_name == 'release' }}
