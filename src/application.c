@@ -5,8 +5,14 @@
 #define LIS2DH12_UPDATE_INTERVAL 8000
 
 #define GPS_TIMEOUT_INTERVAL (5 * 60 * 1000)
+//#define GPS_TIMEOUT_INTERVAL (1 * 60 * 1000)
 
-#define GPS_SEND_INTERVAL (15 * 60 * 1000)
+#define GPS_SEND_INTERVAL_MOVED (15 * 60 * 1000)
+//#define GPS_SEND_INTERVAL_MOVED (1 * 60 * 1000)
+
+//#define GPS_SEND_INTERVAL_IDLE (5 * 60 * 1000)
+
+#define GPS_SEND_INTERVAL_IDLE (10080 * 60 * 1000)
 
 #define THRESHOLD 0.04f
 
@@ -16,6 +22,7 @@
 twr_led_t led;
 
 bool sending_gps = false;
+bool moved = false;
 
 twr_lis2dh12_t lis2dh12;
 twr_lis2dh12_result_g_t lis2dh12_result;
@@ -53,11 +60,16 @@ void lis2_event_handler(twr_lis2dh12_t *self, twr_lis2dh12_event_t event, void *
         {
             twr_log_debug("ALARM");
 
+            if(sending_gps)
+            {
+                moved = true;
+            }
+
             if(!sending_gps)
             {
                 twr_log_debug("REPLANING");
 
-                twr_scheduler_plan_relative(send_gps_task, GPS_SEND_INTERVAL);
+                twr_scheduler_plan_relative(send_gps_task, GPS_SEND_INTERVAL_MOVED);
             }
         }
 
@@ -85,7 +97,7 @@ void tmp112_event_handler(twr_tmp112_t *self, twr_tmp112_event_t event, void *ev
 void battery_event_handler(twr_module_battery_event_t event, void *event_param)
 {
     float voltage;
-    int percentage;
+    //int percentage;
 
     if(event == TWR_MODULE_BATTERY_EVENT_UPDATE)
     {
@@ -144,7 +156,16 @@ void gps_module_event_handler(twr_module_gps_event_t event, void *event_param)
 
                 sending_gps = false;
 
-                twr_scheduler_plan_relative(send_gps_task, GPS_SEND_INTERVAL);
+                if(moved)
+                {
+                    moved = false;
+                    twr_scheduler_plan_relative(send_gps_task, GPS_SEND_INTERVAL_MOVED);
+                }
+                else
+                {
+                    moved = false;
+                    twr_scheduler_plan_relative(send_gps_task, GPS_SEND_INTERVAL_IDLE);
+                }
 
                 twr_module_gps_stop();
                 twr_radio_pub_float("latitude", &(position.latitude));
@@ -181,18 +202,27 @@ void gps_timeout()
     twr_radio_pub_float("longitude", 0);
     twr_radio_pub_float("altitude", 0);
 
-    twr_scheduler_plan_relative(send_gps_task, GPS_SEND_INTERVAL);
+    if(moved)
+    {
+        moved = false;
+        twr_scheduler_plan_relative(send_gps_task, GPS_SEND_INTERVAL_MOVED);
+    }
+    else
+    {
+        moved = false;
+        twr_scheduler_plan_relative(send_gps_task, GPS_SEND_INTERVAL_IDLE);
+    }
 }
 
 void send_gps_coordinates()
 {
     twr_log_debug("SENDING");
+
     sending_gps = true;
     twr_module_gps_start();
 
     twr_scheduler_plan_relative(gps_timeout_task, GPS_TIMEOUT_INTERVAL);
 }
-
 
 void application_init(void)
 {
@@ -230,8 +260,6 @@ void application_init(void)
     twr_led_init(&led, TWR_GPIO_LED, false, 0);
     twr_led_pulse(&led, 2000);
 
-    send_gps_task = twr_scheduler_register(send_gps_coordinates, NULL, GPS_SEND_INTERVAL);
+    send_gps_task = twr_scheduler_register(send_gps_coordinates, NULL, GPS_SEND_INTERVAL_MOVED);
     gps_timeout_task = twr_scheduler_register(gps_timeout, NULL, TWR_TICK_INFINITY);
 }
-
-
