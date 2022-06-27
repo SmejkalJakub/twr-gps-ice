@@ -262,9 +262,13 @@ void gps_timeout()
     sending_gps = false;
 
     twr_module_gps_stop();
-    twr_radio_pub_float("latitude", 0);
-    twr_radio_pub_float("longitude", 0);
-    twr_radio_pub_float("altitude", 0);
+    static char pos_buf[15];
+    snprintf(pos_buf, sizeof(pos_buf), "[0, 0, 0]");
+    static char acc_buf[10];
+    snprintf(acc_buf, sizeof(acc_buf), "[0, 0]");
+
+    twr_radio_pub_string("pos", pos_buf);
+    twr_radio_pub_string("acc", acc_buf);
 
     if(moved)
     {
