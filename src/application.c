@@ -1,18 +1,29 @@
 #include <application.h>
 
-#define UPDATE_INTERVAL (15 * 60 * 1000)
+#define UPDATE_INTERVAL (5 * 60 * 1000)
+
+#define TEMPERATURE_UPDATE_INTERVAL (10 * 1000)
+#define TMP112_PUB_NO_CHANGE_INTERVAL (5 * 60 * 1000)
+#define TMP112_PUB_VALUE_CHANGE 0.5f
 
 #define LIS2DH12_UPDATE_INTERVAL 8000
 
+#define RESET_SEND_SIGNAL_TIME 30 * 1000
+
+//CORRECT VERSION
 #define GPS_TIMEOUT_INTERVAL (5 * 60 * 1000)
+//TEST VERSION
 //#define GPS_TIMEOUT_INTERVAL (1 * 60 * 1000)
 
-#define GPS_SEND_INTERVAL_MOVED (15 * 60 * 1000)
-//#define GPS_SEND_INTERVAL_MOVED (1 * 60 * 1000)
+//CORRECT VERSION
+//#define GPS_SEND_INTERVAL_MOVED (15 * 60 * 1000)
+//TEST VERSION
+#define GPS_SEND_INTERVAL_MOVED (1 * 60 * 1000)
 
-//#define GPS_SEND_INTERVAL_IDLE (5 * 60 * 1000)
-
-#define GPS_SEND_INTERVAL_IDLE (10080 * 60 * 1000)
+//CORRECT VERSION
+//#define GPS_SEND_INTERVAL_IDLE (10080 * 60 * 1000)
+//TEST VERSION
+#define GPS_SEND_INTERVAL_IDLE (5 * 60 * 1000)
 
 #define THRESHOLD 0.04f
 
@@ -24,8 +35,15 @@ twr_led_t led;
 bool sending_gps = false;
 bool moved = false;
 
+int special_alarm_count = 0;
+
+bool not_sended = true;
+
 twr_lis2dh12_t lis2dh12;
 twr_lis2dh12_result_g_t lis2dh12_result;
+
+// alarm settings
+twr_lis2dh12_alarm_t alarm;
 
 float last_X = 0.0f;
 float last_Y = 0.0f;
@@ -36,9 +54,13 @@ twr_led_t gps_led_g;
 
 // Core Module temperature sensor instance
 twr_tmp112_t tmp112;
+float last_temperature;
+twr_tick_t temperature_next_pub;
 
 twr_scheduler_task_id_t send_gps_task;
 twr_scheduler_task_id_t gps_timeout_task;
+
+twr_scheduler_task_id_t reset_send_signal_task;
 
 void send_gps_coordinates();
 void gps_timeout();
@@ -77,7 +99,19 @@ void lis2_event_handler(twr_lis2dh12_t *self, twr_lis2dh12_event_t event, void *
         last_Y = lis2dh12_result.y_axis;
         last_Z = lis2dh12_result.z_axis;
 
-    } else {
+    }
+    else if (event == TWR_LIS2DH12_EVENT_ALARM) {
+        if(special_alarm_count > 6)
+        {
+            send_measurements();
+        }
+        else
+        {
+            special_alarm_count++;
+        }
+        twr_log_debug("SPECIAL ALARM");
+    }
+    else {
         twr_log_debug("error");
     }
 }
@@ -89,7 +123,12 @@ void tmp112_event_handler(twr_tmp112_t *self, twr_tmp112_event_t event, void *ev
         float measured_temp;
         if (twr_tmp112_get_temperature_celsius(self, &measured_temp))
         {
-            twr_radio_pub_temperature(TWR_RADIO_PUB_CHANNEL_R1_I2C0_ADDRESS_DEFAULT, &measured_temp);
+            if ((fabs(measured_temp - last_temperature) >= TMP112_PUB_VALUE_CHANGE) || (temperature_next_pub < twr_scheduler_get_spin_tick()))
+            {
+                twr_radio_pub_temperature(TWR_RADIO_PUB_CHANNEL_R1_I2C0_ADDRESS_DEFAULT, &measured_temp);
+                last_temperature = measured_temp;
+                temperature_next_pub = twr_scheduler_get_spin_tick() + TMP112_PUB_NO_CHANGE_INTERVAL;
+            }
         }
     }
 }
@@ -168,9 +207,14 @@ void gps_module_event_handler(twr_module_gps_event_t event, void *event_param)
                 }
 
                 twr_module_gps_stop();
-                twr_radio_pub_float("latitude", &(position.latitude));
-                twr_radio_pub_float("longitude", &(position.longitude));
-                twr_radio_pub_float("altitude", &(altitude.altitude));
+
+                static char pos_buf[40];
+                snprintf(pos_buf, sizeof(pos_buf), "[%03.5f, %03.5f, %03.5f]", position.latitude, position.longitude, altitude.altitude);
+                static char acc_buf[15];
+                snprintf(acc_buf, sizeof(acc_buf), "[%.2f, %.2f]", accuracy.horizontal, accuracy.vertical);
+
+                twr_radio_pub_string("pos", pos_buf);
+                twr_radio_pub_string("acc", acc_buf);
             }
         }
 
@@ -189,6 +233,26 @@ void gps_module_event_handler(twr_module_gps_event_t event, void *event_param)
     {
         twr_log_info("APP: Event TWR_MODULE_GPS_EVENT_ERROR");
     }
+}
+
+
+void send_measurements()
+{
+    if(not_sended)
+    {
+        not_sended = false;
+        special_alarm_count = 0;
+        last_temperature = 0;
+        twr_tmp112_measure(&tmp112);
+        twr_module_battery_measure();
+
+        twr_scheduler_plan_relative(reset_send_signal_task, RESET_SEND_SIGNAL_TIME);
+    }
+}
+
+void reset_send_signal()
+{
+    not_sended = true;
 }
 
 void gps_timeout()
@@ -228,8 +292,13 @@ void application_init(void)
 {
     twr_log_init(TWR_LOG_LEVEL_DUMP, TWR_LOG_TIMESTAMP_ABS);
 
+    alarm.x_high = true;
+    alarm.y_high = true;
+    alarm.threshold = 800;
+
     twr_lis2dh12_init(&lis2dh12, TWR_I2C_I2C0, 0x19);
     twr_lis2dh12_set_event_handler(&lis2dh12, lis2_event_handler, NULL);
+    twr_lis2dh12_set_alarm(&lis2dh12, &alarm);
     twr_lis2dh12_set_update_interval(&lis2dh12, LIS2DH12_UPDATE_INTERVAL);
 
     if (!twr_module_gps_init())
@@ -251,7 +320,7 @@ void application_init(void)
 
     twr_tmp112_init(&tmp112, TWR_I2C_I2C0, 0x49);
     twr_tmp112_set_event_handler(&tmp112, tmp112_event_handler, NULL);
-    twr_tmp112_set_update_interval(&tmp112, UPDATE_INTERVAL);
+    twr_tmp112_set_update_interval(&tmp112, TEMPERATURE_UPDATE_INTERVAL);
 
      // Initialize radio communication
     twr_radio_init(TWR_RADIO_MODE_NODE_SLEEPING);
@@ -262,4 +331,6 @@ void application_init(void)
 
     send_gps_task = twr_scheduler_register(send_gps_coordinates, NULL, GPS_SEND_INTERVAL_MOVED);
     gps_timeout_task = twr_scheduler_register(gps_timeout, NULL, TWR_TICK_INFINITY);
+    reset_send_signal_task = twr_scheduler_register(reset_send_signal, NULL, TWR_TICK_INFINITY);
 }
+

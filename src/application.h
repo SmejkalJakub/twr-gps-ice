@@ -8,4 +8,6 @@
 #include <twr.h>
 #include <bcl.h>
 
+void send_measurements();
+
 #endif
